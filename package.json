@@ -1,0 +1,25 @@
+{
+  "name": "infra-agent",
+  "version": "1.0.0",
+  "description": "Infrastructure agent — runs Ansible playbooks and checks Proxmox capacity",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "bun tsc --noEmit"
+  },
+  "dependencies": {
+    "@petedio/shared": "^1.0.2",
+    "express": "^5.2.1",
+    "zod": "^4.3.6",
+    "pino": "^10.3.1",
+    "pino-pretty": "^13.1.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/express": "^5.0.6",
+    "typescript": "^5"
+  }
+}
