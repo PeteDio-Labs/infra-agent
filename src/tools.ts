@@ -1,11 +1,24 @@
-/**
- * Tool definitions for the infra-agent Gemma 4 loop.
- * Each tool wraps an Ansible or Proxmox operation and returns a string result.
- */
-
-import type { ToolDef } from '@petedio/shared/agents';
+import type { z } from 'zod';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
+import type { InfraAgentInput, InfraAgentInputSchema } from './schema.js';
+
+export type InfraAction = z.infer<typeof InfraAgentInputSchema>['mode'];
+
+export interface InfraStep {
+  title: string;
+  action: InfraAction;
+  args?: Record<string, unknown>;
+}
+
+export interface InfraStepLog {
+  step: InfraStep;
+  status: 'complete' | 'failed';
+  output: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+}
 
 const ANSIBLE_BASE = '/home/pedro/PeteDio-Labs/infrastructure/ansible';
 const PLAYBOOKS_DIR = join(ANSIBLE_BASE, 'playbooks');
@@ -37,200 +50,113 @@ async function spawnCapture(
   return { stdout, stderr, exitCode };
 }
 
-export function buildTools(gated: boolean, mcBackendUrl: string): ToolDef[] {
-  const tools: ToolDef[] = [
-    // ── Always allowed ────────────────────────────────────────────
-
-    {
-      name: 'list_playbooks',
-      description: 'List all Ansible playbooks available in the playbooks directory',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-      async execute() {
-        try {
-          const files = readdirSync(PLAYBOOKS_DIR).filter(f => f.endsWith('.yml'));
-          if (files.length === 0) return 'No playbooks found in ' + PLAYBOOKS_DIR;
-          return `Playbooks (${files.length}):\n${files.join('\n')}`;
-        } catch (err) {
-          return `Failed to list playbooks: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    },
-
-    {
-      name: 'read_playbook',
-      description: 'Read the contents of an Ansible playbook file',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: 'Playbook filename (e.g. deploy-local-agents.yml). Must match /^[\\w-]+\\.yml$/',
-          },
-        },
-        required: ['name'],
-      },
-      async execute(rawArgs) {
-        const args = rawArgs as { name: string };
-        if (!PLAYBOOK_NAME_RE.test(args.name)) {
-          return `Invalid playbook name: "${args.name}". Must match /^[\\w-]+\\.yml$/`;
-        }
-        const filePath = join(PLAYBOOKS_DIR, args.name);
-        try {
-          const content = readFileSync(filePath, 'utf-8');
-          return content;
-        } catch (err) {
-          return `Failed to read playbook: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    },
-
-    {
-      name: 'get_inventory',
-      description: 'Read the Ansible inventory hosts.yml file',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-      async execute() {
-        try {
-          const content = readFileSync(INVENTORY_FILE, 'utf-8');
-          return content;
-        } catch (err) {
-          return `Failed to read inventory: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    },
-
-    {
-      name: 'dry_run_playbook',
-      description: 'Dry-run an Ansible playbook with --check --diff to preview changes without applying them',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: 'Playbook filename (e.g. deploy-local-agents.yml). Must match /^[\\w-]+\\.yml$/',
-          },
-          extra_vars: {
-            type: 'string',
-            description: 'Optional extra vars string passed to --extra-vars',
-          },
-        },
-        required: ['name'],
-      },
-      async execute(rawArgs) {
-        const args = rawArgs as { name: string; extra_vars?: string };
-        if (!PLAYBOOK_NAME_RE.test(args.name)) {
-          return `Invalid playbook name: "${args.name}". Must match /^[\\w-]+\\.yml$/`;
-        }
-        const playbookPath = join(PLAYBOOKS_DIR, args.name);
-        const cmd = [
-          'ansible-playbook',
-          '-i', INVENTORY_FILE,
-          '--check',
-          '--diff',
-          playbookPath,
-        ];
-        if (args.extra_vars) cmd.push('--extra-vars', args.extra_vars);
-
-        const { stdout, stderr, exitCode } = await spawnCapture(cmd, 120_000);
-        const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-        return `Exit code: ${exitCode}\n${output || '(no output)'}`;
-      },
-    },
-
-    {
-      name: 'check_proxmox_capacity',
-      description: 'Get CPU% and memory% usage per Proxmox node to assess available capacity',
-      parameters: {
-        type: 'object',
-        properties: {},
-      },
-      async execute() {
-        try {
-          const res = await fetch(`${mcBackendUrl}/api/v1/infrastructure/proxmox`);
-          if (!res.ok) return `Proxmox API error: HTTP ${res.status}`;
-          const data = await res.json() as { nodes?: Array<{ node: string; status: string; cpu: number; mem: number; maxmem: number }> };
-          const nodes = data.nodes ?? (Array.isArray(data) ? data : []);
-          if (!nodes.length) return 'No Proxmox nodes found';
-          return nodes.map((n: { node: string; status: string; cpu: number; mem: number; maxmem: number }) => {
-            const cpu = `${(n.cpu * 100).toFixed(1)}%`;
-            const mem = `${((n.mem / n.maxmem) * 100).toFixed(1)}%`;
-            return `${n.node}: status=${n.status}, cpu=${cpu}, mem=${mem}`;
-          }).join('\n');
-        } catch (err) {
-          return `Failed to check Proxmox capacity: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    },
-  ];
-
-  // ── Gated only ────────────────────────────────────────────────
-
-  if (gated) {
-    tools.push(
-      {
-        name: 'run_playbook',
-        description: 'Run an Ansible playbook (applies changes). Only available in gated mode. Blocked for teardown/destroy/delete/nuke playbooks.',
-        parameters: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'Playbook filename (e.g. deploy-local-agents.yml). Must match /^[\\w-]+\\.yml$/',
-            },
-            extra_vars: {
-              type: 'string',
-              description: 'Optional extra vars string passed to --extra-vars',
-            },
-          },
-          required: ['name'],
-        },
-        async execute(rawArgs) {
-          const args = rawArgs as { name: string; extra_vars?: string };
-          if (!PLAYBOOK_NAME_RE.test(args.name)) {
-            return `Invalid playbook name: "${args.name}". Must match /^[\\w-]+\\.yml$/`;
-          }
-          if (DESTRUCTIVE_RE.test(args.name)) {
-            return `Blocked: playbook name "${args.name}" matches destructive pattern (teardown|destroy|delete|nuke). Refusing to run.`;
-          }
-          const playbookPath = join(PLAYBOOKS_DIR, args.name);
-          const cmd = [
-            'ansible-playbook',
-            '-i', INVENTORY_FILE,
-            playbookPath,
-          ];
-          if (args.extra_vars) cmd.push('--extra-vars', args.extra_vars);
-
-          const { stdout, stderr, exitCode } = await spawnCapture(cmd, 300_000);
-          const output = [stdout, stderr].filter(Boolean).join('\n').trim();
-          return `Exit code: ${exitCode}\n${output || '(no output)'}`;
-        },
-      },
-
-      {
-        name: 'get_proxmox_vms',
-        description: 'List all VMs and LXC containers across Proxmox nodes with their status and resource allocation',
-        parameters: {
-          type: 'object',
-          properties: {},
-        },
-        async execute() {
-          try {
-            const res = await fetch(`${mcBackendUrl}/api/v1/infrastructure/proxmox/vms`);
-            if (!res.ok) return `Proxmox VMs API error: HTTP ${res.status}`;
-            const data = await res.json();
-            return JSON.stringify(data, null, 2);
-          } catch (err) {
-            return `Failed to get Proxmox VMs: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        },
-      },
-    );
+function validatePlaybookName(name: string): string | null {
+  if (!PLAYBOOK_NAME_RE.test(name)) {
+    return `Invalid playbook name: "${name}". Must match /^[\\w-]+\\.yml$/`;
   }
+  return null;
+}
 
-  return tools;
+function formatCommandResult(result: { stdout: string; stderr: string; exitCode: number }): string {
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  return `Exit code: ${result.exitCode}\n${output || '(no output)'}`;
+}
+
+export function buildPlan(input: InfraAgentInput): InfraStep[] {
+  switch (input.mode) {
+    case 'list-playbooks':
+      return [{ title: 'List Ansible playbooks', action: 'list-playbooks' }];
+    case 'read-playbook':
+      return [{ title: `Read ${input.playbook}`, action: 'read-playbook', args: { playbook: input.playbook } }];
+    case 'get-inventory':
+      return [{ title: 'Read Ansible inventory', action: 'get-inventory' }];
+    case 'dry-run-playbook':
+      return [{ title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } }];
+    case 'run-playbook':
+      return [
+        { title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } },
+        { title: `Run ${input.playbook}`, action: 'run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } },
+      ];
+    case 'list-vms':
+      return [{ title: 'List Proxmox VMs', action: 'list-vms' }];
+    case 'check-capacity':
+    default:
+      return [{ title: 'Check Proxmox capacity', action: 'check-capacity' }];
+  }
+}
+
+export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBackendUrl: string }): Promise<string> {
+  const { gated, mcBackendUrl } = opts;
+
+  switch (step.action) {
+    case 'list-playbooks': {
+      const files = readdirSync(PLAYBOOKS_DIR).filter(f => f.endsWith('.yml'));
+      if (files.length === 0) return 'No playbooks found in ' + PLAYBOOKS_DIR;
+      return `Playbooks (${files.length}):\n${files.join('\n')}`;
+    }
+    case 'read-playbook': {
+      const name = String(step.args?.playbook ?? '');
+      const invalid = validatePlaybookName(name);
+      if (invalid) return invalid;
+      return readFileSync(join(PLAYBOOKS_DIR, name), 'utf-8');
+    }
+    case 'get-inventory':
+      return readFileSync(INVENTORY_FILE, 'utf-8');
+    case 'dry-run-playbook': {
+      const name = String(step.args?.playbook ?? '');
+      const invalid = validatePlaybookName(name);
+      if (invalid) return invalid;
+      const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, '--check', '--diff', join(PLAYBOOKS_DIR, name)];
+      const extraVars = step.args?.extraVars;
+      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
+      return formatCommandResult(await spawnCapture(cmd, 120_000));
+    }
+    case 'run-playbook': {
+      if (!gated) throw new Error('run-playbook requires gated=true');
+      const name = String(step.args?.playbook ?? '');
+      const invalid = validatePlaybookName(name);
+      if (invalid) return invalid;
+      if (DESTRUCTIVE_RE.test(name)) {
+        return `Blocked: playbook name "${name}" matches destructive pattern (teardown|destroy|delete|nuke). Refusing to run.`;
+      }
+      const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, join(PLAYBOOKS_DIR, name)];
+      const extraVars = step.args?.extraVars;
+      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
+      return formatCommandResult(await spawnCapture(cmd, 300_000));
+    }
+    case 'check-capacity': {
+      const res = await fetch(`${mcBackendUrl}/api/v1/infrastructure/proxmox`);
+      if (!res.ok) return `Proxmox API error: HTTP ${res.status}`;
+      const data = await res.json() as { nodes?: Array<{ node: string; status: string; cpu: number; mem: number; maxmem: number }> };
+      const nodes = data.nodes ?? (Array.isArray(data) ? data : []);
+      if (!nodes.length) return 'No Proxmox nodes found';
+      return nodes.map((n) => {
+        const cpu = `${(n.cpu * 100).toFixed(1)}%`;
+        const mem = `${((n.mem / n.maxmem) * 100).toFixed(1)}%`;
+        return `${n.node}: status=${n.status}, cpu=${cpu}, mem=${mem}`;
+      }).join('\n');
+    }
+    case 'list-vms': {
+      const res = await fetch(`${mcBackendUrl}/api/v1/infrastructure/proxmox/vms`);
+      if (!res.ok) return `Proxmox VMs API error: HTTP ${res.status}`;
+      const data = await res.json();
+      return JSON.stringify(data, null, 2);
+    }
+  }
+}
+
+export function formatReport(logs: InfraStepLog[]): string {
+  if (logs.length === 0) return 'No steps executed.';
+  return logs.map((log, index) => {
+    const lines = [
+      `${index + 1}. ${log.step.title} [${log.status}]`,
+      `action: ${log.step.action}`,
+      `duration: ${log.durationMs}ms`,
+    ];
+    if (log.output) {
+      lines.push('output:');
+      lines.push(log.output);
+    }
+    return lines.join('\n');
+  }).join('\n\n');
 }

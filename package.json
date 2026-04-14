@@ -11,7 +11,7 @@
     "typecheck": "bun tsc --noEmit"
   },
   "dependencies": {
-    "@petedio/shared": "^1.0.2",
+    "@petedio/shared": "^1.1.0",
     "express": "^5.2.1",
     "zod": "^4.3.6",
     "pino": "^10.3.1",
