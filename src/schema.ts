@@ -2,9 +2,14 @@ import { z } from 'zod';
 
 export const InfraAgentInputSchema = z.object({
   mode: z.enum([
+    'health-check',
     'list-playbooks',
     'read-playbook',
     'get-inventory',
+    'deploy-local-agents',
+    'sync-ollama-models',
+    'update-ollama-service',
+    'verify-cloudflare-tunnel',
     'dry-run-playbook',
     'run-playbook',
     'check-capacity',

@@ -3,7 +3,8 @@ import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { InfraAgentInput, InfraAgentInputSchema } from './schema.js';
 
-export type InfraAction = z.infer<typeof InfraAgentInputSchema>['mode'];
+type InfraMode = z.infer<typeof InfraAgentInputSchema>['mode'];
+export type InfraAction = InfraMode | 'run-playbook-readonly';
 
 export interface InfraStep {
   title: string;
@@ -64,12 +65,34 @@ function formatCommandResult(result: { stdout: string; stderr: string; exitCode:
 
 export function buildPlan(input: InfraAgentInput): InfraStep[] {
   switch (input.mode) {
+    case 'health-check':
+      return [
+        { title: 'Check host ping', action: 'run-playbook-readonly', args: { playbook: 'ping-hosts.yml' } },
+        { title: 'Check Proxmox capacity', action: 'check-capacity' },
+      ];
     case 'list-playbooks':
       return [{ title: 'List Ansible playbooks', action: 'list-playbooks' }];
     case 'read-playbook':
       return [{ title: `Read ${input.playbook}`, action: 'read-playbook', args: { playbook: input.playbook } }];
     case 'get-inventory':
       return [{ title: 'Read Ansible inventory', action: 'get-inventory' }];
+    case 'deploy-local-agents':
+      return [
+        { title: 'Dry-run deploy-local-agents.yml', action: 'dry-run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars } },
+        { title: 'Run deploy-local-agents.yml', action: 'run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars } },
+      ];
+    case 'sync-ollama-models':
+      return [
+        { title: 'Dry-run ollama-models.yml', action: 'dry-run-playbook', args: { playbook: 'ollama-models.yml', extraVars: input.extraVars } },
+        { title: 'Run ollama-models.yml', action: 'run-playbook', args: { playbook: 'ollama-models.yml', extraVars: input.extraVars } },
+      ];
+    case 'update-ollama-service':
+      return [
+        { title: 'Dry-run ollama-service.yml', action: 'dry-run-playbook', args: { playbook: 'ollama-service.yml', extraVars: input.extraVars } },
+        { title: 'Run ollama-service.yml', action: 'run-playbook', args: { playbook: 'ollama-service.yml', extraVars: input.extraVars } },
+      ];
+    case 'verify-cloudflare-tunnel':
+      return [{ title: 'Run verify-cloudflare-tunnel.yml', action: 'run-playbook-readonly', args: { playbook: 'verify-cloudflare-tunnel.yml', extraVars: input.extraVars } }];
     case 'dry-run-playbook':
       return [{ title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } }];
     case 'run-playbook':
@@ -89,6 +112,15 @@ export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBac
   const { gated, mcBackendUrl } = opts;
 
   switch (step.action) {
+    case 'run-playbook-readonly': {
+      const name = String(step.args?.playbook ?? '');
+      const invalid = validatePlaybookName(name);
+      if (invalid) return invalid;
+      const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, join(PLAYBOOKS_DIR, name)];
+      const extraVars = step.args?.extraVars;
+      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
+      return formatCommandResult(await spawnCapture(cmd, 180_000));
+    }
     case 'list-playbooks': {
       const files = readdirSync(PLAYBOOKS_DIR).filter(f => f.endsWith('.yml'));
       if (files.length === 0) return 'No playbooks found in ' + PLAYBOOKS_DIR;
@@ -142,6 +174,8 @@ export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBac
       const data = await res.json();
       return JSON.stringify(data, null, 2);
     }
+    default:
+      throw new Error(`Unknown infra action: ${step.action}`);
   }
 }
 
