@@ -10,6 +10,11 @@ export const InfraAgentInputSchema = z.object({
     'sync-ollama-models',
     'update-ollama-service',
     'verify-cloudflare-tunnel',
+    'cloudflare-tunnel-routes',
+    'cloudflare-tunnel-dns',
+    'cloudflare-tunnel-dns-cleanup',
+    'cloudflare-tunnel-verify',
+    'cloudflare-tunnel-connector',
     'dry-run-playbook',
     'run-playbook',
     'check-capacity',
@@ -22,6 +27,8 @@ export const InfraAgentInputSchema = z.object({
     .describe('Playbook filename for read-playbook, dry-run-playbook, or run-playbook'),
   extraVars: z.string().optional()
     .describe('Optional --extra-vars string for playbook execution'),
+  tags: z.string().regex(/^[\w,-]+$/, 'tags must match /^[\\w,-]+$/').optional()
+    .describe('Optional --tags string for playbook execution. Comma-separated, alphanumeric/dash/underscore only'),
   gated: z.boolean().default(false)
     .describe('Whether destructive/write operations are permitted'),
 }).superRefine((input, ctx) => {
