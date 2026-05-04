@@ -27,6 +27,7 @@ const INVENTORY_FILE = join(ANSIBLE_BASE, 'inventory/hosts.yml');
 const SPAWN_CWD = '/home/pedro/PeteDio-Labs';
 
 const PLAYBOOK_NAME_RE = /^[\w-]+\.yml$/;
+const TAGS_RE = /^[\w,-]+$/;
 const DESTRUCTIVE_RE = /teardown|destroy|delete|nuke/i;
 
 async function spawnCapture(
@@ -58,9 +59,38 @@ function validatePlaybookName(name: string): string | null {
   return null;
 }
 
+function appendOptionalArgs(cmd: string[], args: Record<string, unknown> | undefined): string | null {
+  const extraVars = args?.extraVars;
+  if (typeof extraVars === 'string' && extraVars.length > 0) {
+    cmd.push('--extra-vars', extraVars);
+  }
+  const tags = args?.tags;
+  if (typeof tags === 'string' && tags.length > 0) {
+    if (!TAGS_RE.test(tags)) {
+      return `Invalid tags: "${tags}". Must match /^[\\w,-]+$/`;
+    }
+    cmd.push(`--tags=${tags}`);
+  }
+  return null;
+}
+
 function formatCommandResult(result: { stdout: string; stderr: string; exitCode: number }): string {
   const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
   return `Exit code: ${result.exitCode}\n${output || '(no output)'}`;
+}
+
+function cloudflareTunnelSteps(tagName: string, gated: boolean): InfraStep[] {
+  const dryRun: InfraStep = {
+    title: `Dry-run cloudflare-tunnel.yml --tags=${tagName}`,
+    action: 'dry-run-playbook',
+    args: { playbook: 'cloudflare-tunnel.yml', tags: tagName },
+  };
+  const apply: InfraStep = {
+    title: `Apply cloudflare-tunnel.yml --tags=${tagName}`,
+    action: 'run-playbook',
+    args: { playbook: 'cloudflare-tunnel.yml', tags: tagName },
+  };
+  return gated ? [dryRun, apply] : [dryRun];
 }
 
 export function buildPlan(input: InfraAgentInput): InfraStep[] {
@@ -78,8 +108,8 @@ export function buildPlan(input: InfraAgentInput): InfraStep[] {
       return [{ title: 'Read Ansible inventory', action: 'get-inventory' }];
     case 'deploy-local-agents':
       return [
-        { title: 'Dry-run deploy-local-agents.yml', action: 'dry-run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars } },
-        { title: 'Run deploy-local-agents.yml', action: 'run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars } },
+        { title: 'Dry-run deploy-local-agents.yml', action: 'dry-run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars, tags: input.tags } },
+        { title: 'Run deploy-local-agents.yml', action: 'run-playbook', args: { playbook: 'deploy-local-agents.yml', extraVars: input.extraVars, tags: input.tags } },
       ];
     case 'sync-ollama-models':
       return [
@@ -93,12 +123,22 @@ export function buildPlan(input: InfraAgentInput): InfraStep[] {
       ];
     case 'verify-cloudflare-tunnel':
       return [{ title: 'Run verify-cloudflare-tunnel.yml', action: 'run-playbook-readonly', args: { playbook: 'verify-cloudflare-tunnel.yml', extraVars: input.extraVars } }];
+    case 'cloudflare-tunnel-routes':
+      return cloudflareTunnelSteps('routes', input.gated);
+    case 'cloudflare-tunnel-dns':
+      return cloudflareTunnelSteps('dns', input.gated);
+    case 'cloudflare-tunnel-dns-cleanup':
+      return cloudflareTunnelSteps('dns-cleanup', input.gated);
+    case 'cloudflare-tunnel-connector':
+      return cloudflareTunnelSteps('connector', input.gated);
+    case 'cloudflare-tunnel-verify':
+      return [{ title: 'Run cloudflare-tunnel.yml --tags=verify', action: 'run-playbook-readonly', args: { playbook: 'cloudflare-tunnel.yml', tags: 'verify' } }];
     case 'dry-run-playbook':
-      return [{ title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } }];
+      return [{ title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars, tags: input.tags } }];
     case 'run-playbook':
       return [
-        { title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } },
-        { title: `Run ${input.playbook}`, action: 'run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars } },
+        { title: `Dry-run ${input.playbook}`, action: 'dry-run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars, tags: input.tags } },
+        { title: `Run ${input.playbook}`, action: 'run-playbook', args: { playbook: input.playbook, extraVars: input.extraVars, tags: input.tags } },
       ];
     case 'list-vms':
       return [{ title: 'List Proxmox VMs', action: 'list-vms' }];
@@ -117,8 +157,8 @@ export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBac
       const invalid = validatePlaybookName(name);
       if (invalid) return invalid;
       const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, join(PLAYBOOKS_DIR, name)];
-      const extraVars = step.args?.extraVars;
-      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
+      const argErr = appendOptionalArgs(cmd, step.args);
+      if (argErr) return argErr;
       return formatCommandResult(await spawnCapture(cmd, 180_000));
     }
     case 'list-playbooks': {
@@ -139,8 +179,8 @@ export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBac
       const invalid = validatePlaybookName(name);
       if (invalid) return invalid;
       const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, '--check', '--diff', join(PLAYBOOKS_DIR, name)];
-      const extraVars = step.args?.extraVars;
-      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
+      const argErr = appendOptionalArgs(cmd, step.args);
+      if (argErr) return argErr;
       return formatCommandResult(await spawnCapture(cmd, 120_000));
     }
     case 'run-playbook': {
@@ -152,9 +192,9 @@ export async function executeStep(step: InfraStep, opts: { gated: boolean; mcBac
         return `Blocked: playbook name "${name}" matches destructive pattern (teardown|destroy|delete|nuke). Refusing to run.`;
       }
       const cmd = ['ansible-playbook', '-i', INVENTORY_FILE, join(PLAYBOOKS_DIR, name)];
-      const extraVars = step.args?.extraVars;
-      if (typeof extraVars === 'string' && extraVars.length > 0) cmd.push('--extra-vars', extraVars);
-      return formatCommandResult(await spawnCapture(cmd, 300_000));
+      const argErr = appendOptionalArgs(cmd, step.args);
+      if (argErr) return argErr;
+      return formatCommandResult(await spawnCapture(cmd, 600_000));
     }
     case 'check-capacity': {
       const res = await fetch(`${mcBackendUrl}/api/v1/infrastructure/proxmox`);
