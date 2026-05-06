@@ -665,13 +665,12 @@ describe('executeTerraformStep — wiring', () => {
     ).rejects.toThrow();
   });
 
-  it('auto-proceeds when no onBeforeStep hook is wired (escape hatch)', async () => {
-    // This exercises the `if (!hook)` branch. Used by tests / one-off CLI
-    // runs where the caller has already approved via human intervention.
-    const { runner } = scriptedRunner([
-      { match: 'apply -no-color -auto-approve tfplan', result: { stdout: 'ok', exitCode: 0 } },
-      { match: 'state list', result: { stdout: '', exitCode: 0 } },
-    ]);
+  it('aborts when no onBeforeStep hook is wired (deny-by-default)', async () => {
+    // Exercises the `if (!hook)` branch. Previously this was an "escape
+    // hatch" that auto-proceeded; now it fails closed so a host that
+    // forgets to wire a real approval channel cannot accidentally apply.
+    // The runner is intentionally empty: runApply must NOT be called.
+    const { runner, calls } = scriptedRunner([]);
     const state = makePlanState();
     const step: TerraformStep = {
       title: 'apply',
@@ -679,7 +678,9 @@ describe('executeTerraformStep — wiring', () => {
       args: { environment: ENV, gated: true },
     };
     const out = await executeTerraformStep(step, { runner, state });
-    expect(out).toContain('ok');
+    expect(out).toBe('Aborted by operator.');
+    expect(state.aborted).toBe(true);
+    expect(calls).toHaveLength(0);
   });
 });
 

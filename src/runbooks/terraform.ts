@@ -606,9 +606,14 @@ async function invokeGate(
   args: { preview: ApprovalPreview; description: string; actionType: string },
 ): Promise<GateDecision> {
   if (!hook) {
-    // No hook wired — treat as auto-approve. The host (index.ts) is
-    // responsible for wiring a real hook before exposing destructive modes.
-    return 'proceed';
+    // No hook wired — DENY by default. Previously this returned 'proceed'
+    // (auto-approve), which would silently skip the human checkpoint if a
+    // host ever wired a gated mode without an approval channel. Failing
+    // closed is safer: gated modes that reach this branch abort cleanly
+    // and the operator has to explicitly wire a hook before any apply
+    // can run. The host (index.ts) is still responsible for wiring a
+    // real hook for normal operation.
+    return 'abort';
   }
   return hook(args);
 }
