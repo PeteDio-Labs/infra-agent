@@ -29,7 +29,16 @@ import type {
 
 // ─── Constants ───────────────────────────────────────────────────
 
-export const TF_ENV_ROOT = '/home/pedro/PeteDio-Labs/infrastructure/terraform/environments';
+export const TF_ENV_ROOT_DEFAULT = '/home/pedro/PeteDio-Labs/infrastructure/terraform/environments';
+
+/**
+ * Root directory for terraform environment workspaces. Defaults to the LXC
+ * 113 path; tests + Mac runs can override via TF_ENV_ROOT.
+ */
+export function getTfEnvRoot(): string {
+  return process.env.TF_ENV_ROOT ?? TF_ENV_ROOT_DEFAULT;
+}
+
 export const TF_PLAN_FILE = 'tfplan';
 export const TF_BIN = process.env.TERRAFORM_BIN ?? 'terraform';
 
@@ -113,7 +122,7 @@ export function resolveEnvironmentDir(environment: string): string {
       'invalid-arg',
     );
   }
-  const dir = resolve(TF_ENV_ROOT, environment);
+  const dir = resolve(getTfEnvRoot(), environment);
   if (!existsSync(dir)) {
     throw new TerraformError(
       `Terraform environment directory not found: ${dir}`,
