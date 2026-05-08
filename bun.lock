@@ -19,7 +19,7 @@
     },
   },
   "packages": {
-    "@petedio/shared": ["@petedio/shared@1.1.0", "https://registry.toastedbytes.com/repository/npm-hosted/@petedio/shared/-/shared-1.1.0.tgz", { "dependencies": { "zod": "^4.3.6" } }, "sha512-JeKGXmIaUBt82dGPBmYl0WJGlBXJNynGgO3JzVff2MkLx+ETn1sawpP/q7VDVHKYLK+eLjjKo5diZ12YmMUSYQ=="],
+    "@petedio/shared": ["@petedio/shared@1.1.0", "https://registry.pdlab.dev/repository/npm-hosted/@petedio/shared/-/shared-1.1.0.tgz", { "dependencies": { "zod": "^4.3.6" } }, "sha512-JeKGXmIaUBt82dGPBmYl0WJGlBXJNynGgO3JzVff2MkLx+ETn1sawpP/q7VDVHKYLK+eLjjKo5diZ12YmMUSYQ=="],
 
     "@pinojs/redact": ["@pinojs/redact@0.4.0", "", {}, "sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg=="],
 
